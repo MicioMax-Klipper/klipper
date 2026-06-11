@@ -636,7 +636,8 @@ class LoadCellPrinterProbe:
         # printer integration
         LoadCellProbeCommands(config, load_cell_probing_move)
         probe.ProbeVirtualEndstopDeprecation(config)
-        self._printer.add_object('probe', self)
+        self._chipname, self._gcode_prefix = probe.lookup_probe_names(config)
+        self._printer.add_object(self._chipname, self)
 
     def get_probe_params(self, gcmd=None):
         return self._param_helper.get_probe_params(gcmd)
@@ -655,4 +656,7 @@ class LoadCellPrinterProbe:
 
 
 def load_config(config):
+    return LoadCellPrinterProbe(config)
+
+def load_config_prefix(config):
     return LoadCellPrinterProbe(config)
