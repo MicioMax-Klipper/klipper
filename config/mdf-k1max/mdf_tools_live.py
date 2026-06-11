@@ -40,9 +40,26 @@ class MDFLive:
             self.gcode.register_command(name, None)
 
     def _get_probe_oid(self):
-        probe = self.printer.lookup_object("mdf_loadcell_probe_real")
-        mcu_probe = probe.get_mcu_load_cell_probe()
-        return mcu_probe.get_oid()
+        # Current setup uses [load_cell_probe lc].
+        # Older MDF backend used object name "mdf_loadcell_probe_real".
+        for objname in ("lc", "mdf_loadcell_probe_real"):
+            probe = self.printer.lookup_object(objname, None)
+            if probe is None:
+                continue
+
+            if hasattr(probe, "get_mcu_load_cell_probe"):
+                return probe.get_mcu_load_cell_probe().get_oid()
+
+            if hasattr(probe, "_mcu_load_cell_probe"):
+                return probe._mcu_load_cell_probe.get_oid()
+
+            raise self.printer.config_error(
+                "MDF: object '%s' found, but it has no MCU load cell probe handle" % objname
+            )
+
+        raise self.printer.config_error(
+            "MDF: unable to find load cell probe object; tried 'lc' and 'mdf_loadcell_probe_real'"
+        )
 
     def _get_mcu_handle(self, meta):
         if meta["handle"] is not None:
