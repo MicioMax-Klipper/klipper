@@ -50,6 +50,7 @@ MAX_BUF_LEN = 32
 
 
 # PRTouch "endstop" wrapper
+
 class PRTouchEndstopWrapper:
     def __init__(self, config):
         self.tri_min_hold_init = []
@@ -231,6 +232,12 @@ class PRTouchEndstopWrapper:
         self.nozzle_clear_z_out_of_range = False
         self.After_G28Z_skip_bed_tilt_flag = False
         self.trig_info = [-1,-1,-1,-1]
+        self.mdf_tri_dir_override = None
+        self.mdf_tri_need_override = None
+        self.mdf_tri_min_override = None
+        self.mdf_tri_max_override = None
+        self.mdf_tri_hftr_override = None
+        self.mdf_tri_lftr_override = None
         self.Tri_bed_test_z = []
         self.save_pres_file = None
         pass
@@ -309,6 +316,14 @@ class PRTouchEndstopWrapper:
         pass
 
     def _handle_result_run_step_prtouch(self, params):
+        if getattr(self, 'mdf_step_resp_dbg_cnt', 0) < 8:
+            self.mdf_step_resp_dbg_cnt = getattr(self, 'mdf_step_resp_dbg_cnt', 0) + 1
+            self.print_msg('MDF_STEP_RESP',
+                           'idx=%s tri_time=%s tick0=%s step0=%s len_before=%d'
+                           % (str(params.get('index')), str(params.get('tri_time')),
+                              str(params.get('tick0')), str(params.get('step0')),
+                              len(self.step_res)),
+                           True)
         self.step_tri_time = params['tri_time'] / 10000.
         for i in range(4):
             sdir = {'tick': params['tick%d' % i] / 10000., 'step': params['step%d' % i], 'index': params['index']}
@@ -351,10 +366,10 @@ class PRTouchEndstopWrapper:
         return 0
     
     def add_stepper(self, stepper):
-        self.mm_per_step = self.steppers[0].get_step_dist() * self.step_base
         if stepper in self.steppers:
             return
         self.steppers.append(stepper)
+        self.mm_per_step = stepper.get_step_dist() * self.step_base
 
     def get_steppers(self):
         return list(self.steppers)
@@ -581,8 +596,12 @@ class PRTouchEndstopWrapper:
             self.gcode.run_script_from_command('G1 X%.2f Y%.2f Z%.2f F%d' % (now_pos[0] + self.shake_range, now_pos[1] - self.shake_range, now_pos[2] + self.shake_range / 2, int(60 * max_z_velocity * 0.25)))
             self.gcode.run_script_from_command('G1 X%.2f Y%.2f Z%.2f F%d' % (now_pos[0] + self.shake_range, now_pos[1] + self.shake_range, now_pos[2] - self.shake_range / 2, int(60 * max_z_velocity * 0.25)))
             self.gcode.run_script_from_command('G1 X%.2f Y%.2f Z%.2f F%d' % (now_pos[0] - self.shake_range, now_pos[1] + self.shake_range, now_pos[2] + self.shake_range / 2, int(60 * max_z_velocity * 0.25)))
-            while len(self.toolhead.move_queue.queue) >= 5:
-                self.delay_s(0.010)
+            move_queue = getattr(self.toolhead, "move_queue", None)
+            if move_queue is None:
+                move_queue = getattr(self.toolhead, "lookahead", None)
+            if move_queue is not None:
+                while len(move_queue.queue) >= 5:
+                    self.delay_s(0.010)
         self.move(now_pos, self.rdy_z_spd)
         pass
 
@@ -1176,14 +1195,29 @@ class PRTouchEndstopWrapper:
             self.step_res, self.pres_res = [], []
             self.deal_avgs_prtouch_cmd.send([self.pres_oid, 8])
             step_cnt_down, step_us_down, acc_ctl_cnt = self.get_step_cnts(down_min_z, use_tri_z_down_spd)
-            self.start_pres_prtouch_cmd.send([self.pres_oid, 0, self.tri_acq_ms, self.tri_send_ms, self.tri_need_cnt, 
-                                              int(use_tri_hftr_cut * 1000), int(use_tri_lftr_k1 * 1000), int(use_tri_min_hold), int(use_tri_max_hold)])
+            use_tri_dir = 0 if self.mdf_tri_dir_override is None else self.mdf_tri_dir_override
+            use_tri_need = self.tri_need_cnt if self.mdf_tri_need_override is None else self.mdf_tri_need_override
+            use_tri_hftr = use_tri_hftr_cut if self.mdf_tri_hftr_override is None else self.mdf_tri_hftr_override
+            use_tri_lftr = use_tri_lftr_k1 if self.mdf_tri_lftr_override is None else self.mdf_tri_lftr_override
+            use_tri_min = use_tri_min_hold if self.mdf_tri_min_override is None else self.mdf_tri_min_override
+            use_tri_max = use_tri_max_hold if self.mdf_tri_max_override is None else self.mdf_tri_max_override
+            self.print_msg(
+                'MDF DEBUG',
+                'start_pres_prtouch tri_dir=%d need=%d hftr=%.3f lftr=%.3f min=%.1f max=%.1f'
+                % (use_tri_dir, use_tri_need, use_tri_hftr, use_tri_lftr, use_tri_min, use_tri_max),
+                True
+            )
+            self.start_pres_prtouch_cmd.send([self.pres_oid, use_tri_dir, self.tri_acq_ms, self.tri_send_ms, use_tri_need,
+                                              int(use_tri_hftr * 1000), int(use_tri_lftr * 1000), int(use_tri_min), int(use_tri_max)])
             self.start_step_prtouch_cmd.send([self.step_oid, 0, self.tri_send_ms, step_cnt_down, step_us_down, acc_ctl_cnt, self.low_spd_nul, self.send_step_duty, 0])
             t_last = time.time()
             while (time.time() - t_last < (down_min_z / use_tri_z_down_spd + 2)) and (len(self.step_res) != MAX_BUF_LEN or len(self.pres_res) != MAX_BUF_LEN):
                 self.delay_s(0.010)
             self.start_step_prtouch_cmd.send([self.step_oid, 0, 0, 0, 0, 0, self.low_spd_nul, self.send_step_duty, 0])
             self.start_pres_prtouch_cmd.send([self.pres_oid, 0, 0, 0, 0, 0, 0, 0, 0])
+            self.print_msg('MDF DEBUG', 'after run_step_prtouch: step_res_len=%d pres_res_len=%d step_tri_time=%.6f pres_tri_time=%.6f'
+                           % (len(self.step_res), len(self.pres_res), self.step_tri_time, self.pres_tri_time), True)
+
             if len(self.step_res) == 0 or len(self.pres_res) == 0:
                 if re_g28:
                     self.move(now_pos[:2] + [100, now_pos[3]], self.rdy_z_spd)
@@ -1979,12 +2013,38 @@ class PRTouchEndstopWrapper:
         run_spd = gcmd.get_float('SPD', 10)
         run_dis = gcmd.get_float('DIS', 10)
         self.step_res = []
+        self.mdf_step_resp_dbg_cnt = 0
+
+        self.print_msg('MDF_START_STEP',
+                       'begin dir=%d spd=%.4f dis=%.4f mm_per_step=%s step_oid=%s tri_send_ms=%s low_spd_nul=%s duty=%s'
+                       % (run_dir, run_spd, run_dis, str(self.mm_per_step), str(self.step_oid),
+                          str(self.tri_send_ms), str(self.low_spd_nul), str(self.send_step_duty)),
+                       True)
+
         step_cnt, step_us, acc_ctl_cnt = self.get_step_cnts(run_dis, run_spd)
-        self.start_step_prtouch_cmd.send([self.step_oid, run_dir, self.tri_send_ms, step_cnt, step_us, acc_ctl_cnt, self.low_spd_nul, self.send_step_duty, 0])
+        timeout_s = run_dis / run_spd + 5
+
+        self.print_msg('MDF_START_STEP',
+                       'calc step_cnt=%d step_us=%d acc_ctl_cnt=%d timeout=%.4f'
+                       % (step_cnt, step_us, acc_ctl_cnt, timeout_s),
+                       True)
+
+        self.start_step_prtouch_cmd.send([self.step_oid, run_dir, self.tri_send_ms,
+                                          step_cnt, step_us, acc_ctl_cnt,
+                                          self.low_spd_nul, self.send_step_duty, 0])
         t_last = time.time()
-        while (time.time() - t_last < (run_dis / run_spd + 5)) and (len(self.step_res) != MAX_BUF_LEN):
+        while (time.time() - t_last < timeout_s) and (len(self.step_res) != MAX_BUF_LEN):
             self.delay_s(0.010)
-        self.start_step_prtouch_cmd.send([self.step_oid, 0, 0, 0, 0, 0, self.low_spd_nul, self.send_step_duty, 0])
+
+        elapsed_s = time.time() - t_last
+        last_step = self.step_res[-1] if self.step_res else None
+        self.print_msg('MDF_START_STEP',
+                       'done elapsed=%.4f step_res_len=%d step_tri_time=%.6f last=%s'
+                       % (elapsed_s, len(self.step_res), self.step_tri_time, str(last_step)),
+                       True)
+
+        self.start_step_prtouch_cmd.send([self.step_oid, 0, 0, 0, 0, 0,
+                                          self.low_spd_nul, self.send_step_duty, 0])
         pass
 
     cmd_PRTOUCH_READY_help = "Test the ready point."
@@ -2071,12 +2131,45 @@ class PRTouchEndstopWrapper:
             self.ck_and_manual_get_step()
         pass
 
-    cmd_TRIG_TEST_help = "Test The Tri is Normal"
-    def cmd_TRIG_TEST(self, gcmd):  
-        self.enable_steps()          
+    cmd_TRIG_TEST_help = "Test The Tri is Normal. Params: C=count, DIS=max distance mm, PDIR=pressure dir, MIN/MAX/NEED/HFTR/LFTR override trigger params"
+    def cmd_TRIG_TEST(self, gcmd):
+        self.enable_steps()
         self.get_mm_per_step()
         run_cnt = gcmd.get_int('C', 1)
-        self.run_step_prtouch(20, 0, False, run_cnt, run_cnt, True) # (self.max_z*1.2, 0, False, run_cnt, run_cnt, True)
+        run_dis = gcmd.get_float('DIS', 0.5, minval=0.02, maxval=2.0)
+
+        pdir = gcmd.get_int('PDIR', -1, minval=-1, maxval=1)
+        need = gcmd.get_int('NEED', -1, minval=-1, maxval=MAX_PRES_CNT)
+        min_hold = gcmd.get_float('MIN', -1.0)
+        max_hold = gcmd.get_float('MAX', -1.0)
+        hftr = gcmd.get_float('HFTR', -1.0)
+        lftr = gcmd.get_float('LFTR', -1.0)
+
+        self.mdf_tri_dir_override = None if pdir < 0 else pdir
+        self.mdf_tri_need_override = None if need < 0 else need
+        self.mdf_tri_min_override = None if min_hold < 0 else min_hold
+        self.mdf_tri_max_override = None if max_hold < 0 else max_hold
+        self.mdf_tri_hftr_override = None if hftr < 0 else hftr
+        self.mdf_tri_lftr_override = None if lftr < 0 else lftr
+
+        self.print_msg(
+            'TRIG_TEST',
+            'C=%d DIS=%.3f PDIR=%s NEED=%s MIN=%s MAX=%s HFTR=%s LFTR=%s'
+            % (run_cnt, run_dis, str(self.mdf_tri_dir_override),
+               str(self.mdf_tri_need_override), str(self.mdf_tri_min_override),
+               str(self.mdf_tri_max_override), str(self.mdf_tri_hftr_override),
+               str(self.mdf_tri_lftr_override)),
+            True
+        )
+        try:
+            self.run_step_prtouch(run_dis, 0, False, run_cnt, run_cnt, True)
+        finally:
+            self.mdf_tri_dir_override = None
+            self.mdf_tri_need_override = None
+            self.mdf_tri_min_override = None
+            self.mdf_tri_max_override = None
+            self.mdf_tri_hftr_override = None
+            self.mdf_tri_lftr_override = None
         pass
     cmd_TRIG_BED_TEST_help = "Test The Tri in bed mesh"
     def cmd_TRIG_BED_TEST(self, gcmd): 

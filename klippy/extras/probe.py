@@ -624,9 +624,9 @@ class ProbeEndstopWrapper:
 
 # Main external probe interface
 class PrinterProbe:
-    def __init__(self, config):
+    def __init__(self, config, mcu_probe=None):
         self.printer = config.get_printer()
-        self.mcu_probe = ProbeEndstopWrapper(config)
+        self.mcu_probe = mcu_probe or ProbeEndstopWrapper(config)
         self.cmd_helper = ProbeCommandHelper(config, self,
                                              self.mcu_probe.query_endstop)
         self.probe_offsets = ProbeOffsetsHelper(config)
