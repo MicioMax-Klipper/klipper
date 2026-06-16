@@ -214,7 +214,8 @@ class PRTouchEndstopWrapper:
         self.gcode.register_command('NOZZLE_CLEAR', self.cmd_NOZZLE_CLEAR, desc=self.cmd_NOZZLE_CLEAR_help)       
         self.gcode.register_command('SAFE_DOWN_Z', self.cmd_SAFE_DOWN_Z, desc=self.cmd_SAFE_DOWN_Z_help)   
         self.gcode.register_command('SAFE_MOVE_Z', self.cmd_SAFE_MOVE_Z, desc=self.cmd_SAFE_MOVE_Z_help)    
-        self.gcode.register_command('ACCURATE_HOME_Z', self.cmd_ACCURATE_HOME_Z, desc=self.cmd_ACCURATE_HOME_Z_help) 
+        self.gcode.register_command('ACCURATE_HOME_Z', self.cmd_ACCURATE_HOME_Z, desc=self.cmd_ACCURATE_HOME_Z_help)
+        self.gcode.register_command('PRTOUCH_HOME_Z_COARSE', self.cmd_PRTOUCH_HOME_Z_COARSE, desc=self.cmd_PRTOUCH_HOME_Z_COARSE_help)
         self.gcode.register_command('SELF_CHECK_PRTOUCH', self.cmd_SELF_CHECK_PRTOUCH, desc=self.cmd_SELF_CHECK_PRTOUCH_help)
         self.gcode.register_command('START_STEP_PRTOUCH', self.cmd_START_STEP_PRTOUCH, desc=self.cmd_START_STEP_PRTOUCH_help)
         self.gcode.register_command('TRIG_BED_TEST', self.cmd_TRIG_BED_TEST, desc=self.cmd_TRIG_BED_TEST_help)    
@@ -1733,6 +1734,10 @@ class PRTouchEndstopWrapper:
             if self.g28_wait_cool_down:
                 self.print_msg('DEBUG', 'G28_Z: Wait for Nozzle to recovery[%.2f -> %.2f]...' % (self.hot_min_temp, target_temp))
                 self.set_hot_temps(temp=target_temp, wait=False, err=5)
+            if self.use_adc:
+                self.set_fan_speed('heater_fan', self.fan_heat_max_spd)
+            self.set_step_par(load_sys=True)
+            self.bed_mesh.set_mesh(mesh)
             return True   
         # 3. Normal probe z    
         use_tri_times = 0
@@ -2019,10 +2024,16 @@ class PRTouchEndstopWrapper:
         self.safe_move_z(run_sta, run_dis, run_spd, run_rdo)
         pass
 
-    cmd_ACCURATE_HOME_Z_help = "Coarse home z"  
+    cmd_ACCURATE_HOME_Z_help = "Accurate home z"
     def cmd_ACCURATE_HOME_Z(self, gcmd):
         self.ck_g28ed()
         self.run_G28_Z(True)
+        pass
+
+    cmd_PRTOUCH_HOME_Z_COARSE_help = "Coarse home z using the Creality PRTouch G28 coarse stage only"
+    def cmd_PRTOUCH_HOME_Z_COARSE(self, gcmd):
+        self.ck_g28ed()
+        self.run_G28_Z(False)
         pass
 
     cmd_SAFE_DOWN_Z_help = "Safe down z before G28"
